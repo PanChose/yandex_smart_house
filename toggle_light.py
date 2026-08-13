@@ -20,6 +20,8 @@
 """
 
 import sys
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 from quasar_api import Quasar
 
 COOKIE_FILE = "my_cookies"  # файл my_cookies.txt рядом со скриптом, расширение не указывается
@@ -31,6 +33,12 @@ def get_api():
 
 def find_device(api, name_part):
 	devices = api.get_devices()
+
+	# если передали точный ID устройства - используем его напрямую
+	by_id = [d for d in devices if d.id == name_part]
+	if by_id:
+		return by_id[0]
+
 	matches = [d for d in devices if name_part.lower() in d.name.lower()]
 	if not matches:
 		print(f"Устройство с именем, содержащим '{name_part}', не найдено.")

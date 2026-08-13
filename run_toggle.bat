@@ -1,0 +1,2 @@
+@echo off
+"C:\Users\kakty\IdeaProjects\yandex_smart_house\.venv\Scripts\python.exe" "C:\Users\kakty\IdeaProjects\yandex_smart_house\toggle_light.py" %* >> "C:\Users\kakty\IdeaProjects\yandex_smart_house\hotkey_log.txt" 2>&1

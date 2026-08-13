@@ -25,17 +25,45 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 from quasar_api import Quasar
 
-COOKIE_FILE = "my_cookies"  # файл my_cookies.txt рядом со скриптом, расширение не указывается
+import json
+from pathlib import Path
+
+COOKIE_FILE = "my_cookies.txt"  # файл рядом со скриптом
 
 
 def get_api():
-	return Quasar(COOKIE_FILE)
+	path = Path(COOKIE_FILE)
+	if not path.is_file():
+		print(f"Файл {COOKIE_FILE} не найден рядом со скриптом.")
+		sys.exit(1)
+
+	raw = path.read_text(encoding="utf-8").strip()
+	try:
+		cookies = json.loads(raw)
+	except json.JSONDecodeError:
+		print(f"Файл {COOKIE_FILE} повреждён или это не JSON-массив куки.")
+		sys.exit(1)
+
+	# Яндекс переименовал Passport в Yandex ID, отдельного домена
+	# passport.yandex.* в куках больше нет, а библиотеке он нужен только
+	# для заголовка Ya-Client-Host - поэтому подставляем его сами,
+	# если такого домена ещё нет в файле.
+	has_passport = any(
+		c.get("domain", "").startswith("passport.yandex.") for c in cookies
+	)
+	if not has_passport:
+		cookies.insert(0, {
+			"domain": "passport.yandex.ru",
+			"name": "_fix_domain",
+			"value": "1",
+		})
+
+	# передаём Quasar готовую JSON-строку напрямую (а не имя файла),
+	# чтобы не редактировать my_cookies.txt руками
+	return Quasar(json.dumps(cookies))
 
 
-def find_device(api, name_part):
-	devices = api.get_devices()
-
-	# если передали точный ID устройства - используем его напрямую
+def find_device_in_list(devices, name_part):
 	by_id = [d for d in devices if d.id == name_part]
 	if by_id:
 		return by_id[0]
@@ -43,17 +71,16 @@ def find_device(api, name_part):
 	matches = [d for d in devices if name_part.lower() in d.name.lower()]
 	if not matches:
 		print(f"Устройство с именем, содержащим '{name_part}', не найдено.")
-		sys.exit(1)
+		return None
 	if len(matches) > 1:
 		print("Найдено несколько устройств, уточни название:")
 		for d in matches:
 			print(f"  - {d.name} (id={d.id})")
-		sys.exit(1)
+		return None
 	return matches[0]
 
 
-def apply_command(api, command, name_part):
-	device_stub = find_device(api, name_part)
+def apply_command(api, command, device_stub):
 	device = api.get_device(device_stub.id)
 
 	if command == "on":
@@ -76,7 +103,6 @@ def apply_command(api, command, name_part):
 	else:
 		print(f"Неизвестная команда: {command}")
 		print(__doc__)
-		sys.exit(1)
 
 
 def main():
@@ -97,11 +123,22 @@ def main():
 		print("Укажи имя/ID устройства, например: python toggle_light.py on \"Лампочка\"")
 		sys.exit(1)
 
-	# можно передать сразу несколько ID/имён - применятся все за один запуск,
-	# без повторного старта Python и без повторной задержки на инициализацию:
-	# python toggle_light.py toggle "id1" "id2" "id3"
+	# список устройств запрашиваем ОДИН раз, а не на каждую лампу
+	devices = api.get_devices()
+
+	device_stubs = []
 	for name_part in sys.argv[2:]:
-		apply_command(api, command, name_part)
+		stub = find_device_in_list(devices, name_part)
+		if stub is None:
+			sys.exit(1)
+		device_stubs.append(stub)
+
+	# можно передать сразу несколько ID/имён - команды на все лампы
+	# летят ПАРАЛЛЕЛЬНО (в отдельных потоках), а не одна за другой:
+	# python toggle_light.py toggle "id1" "id2" "id3"
+	from concurrent.futures import ThreadPoolExecutor
+	with ThreadPoolExecutor(max_workers=len(device_stubs)) as pool:
+		list(pool.map(lambda stub: apply_command(api, command, stub), device_stubs))
 
 
 if __name__ == "__main__":
